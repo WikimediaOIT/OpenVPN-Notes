@@ -1,2 +1,2 @@
 # OpenVPN-Notes
-Notes on installing, configuring and managing OpenVPN
+**Notes** on _installing_, configuring and managing OpenVPN
