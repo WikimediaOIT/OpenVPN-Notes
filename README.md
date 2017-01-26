@@ -4,7 +4,7 @@
 OpenVPN is an Open Source solution for implementing a VPN server. In this article we will describe how to install and setup OpenVPN, as well as OpenVPN with 2 Factor Authentication. The setup described here is using the Ubuntu distribution of Linux. The initial server setup instructions have been adapted from Ubuntu’s official guide on setting up an OpenVPN server.
 
 # Build the initial server
-Install OpenVPN on Ubuntu 16.04 using instructions from OpenVPN
+## Install OpenVPN on Ubuntu 16.04 using instructions from OpenVPN
 
 Instructions: https://help.ubuntu.com/lts/serverguide/openvpn.html
 
@@ -14,7 +14,7 @@ sudo -i
 # Install the OpenVPN packaged and the easy-rsa package
 apt-get install easy-rsa openvpn
 ```
-Setup the Public Key Infrastructure
+### Setup the Public Key Infrastructure
 
 Make a directory for easy-rsa in the OpenVPN directory
 
@@ -112,6 +112,7 @@ Write out database with 1 new entries
 Data Base Updated
 root@sykes:/etc/openvpn/easy-rsa#
 ```
+### Configure the OpenVPN service
 To configure the server to run the OpenVPN service we will need to make a configuration file. OpenVPN copies a template to the server to be used. The template can be found in the documentation and examples folder on the server. Another template, linked here, is available on OpenVPN’s GitHub site.
 https://raw.githubusercontent.com/OpenVPN/openvpn/master/sample/sample-config-files/server.conf
 
@@ -180,3 +181,82 @@ verb 3
 ```
 
 Once your client file has been created, test the connection with your OpenVPN client. On my Mac I use Viscosity. Another client for mac that could be used is Tunnelblick. Both of these clients I find easier to use then the command line prompt.
+
+# Harden VPN Security by using PKCS #11
+The great thing about OpenVPN is that it can be used with open standards such as PKCS. PKCS #11 is a standard for Cryptographic Token Interface. These devices can store certificates and keys such as the ones used by OpenVPN. In this part of the tutorial we will be using a Yubikey to store the certificate and connect to the VPN. Please, note, getting the certificate on the card needed quite a bit of hackery, but nonetheless, here is my process.
+From the yubikey forum post one needs openvpn, opensc, and yubico-piv-tool or yubikey-piv-manager
+Viscosity OpenVPN application:
+https://www.sparklabs.com/viscosity/
+OpenSc can be installed using homebrew.
+http://brew.sh/
+```
+brew install opensc
+```
+OpenSc install location
+```
+/usr/local/Cellar/opensc/0.15.0/lib/opensc-pkcs11.so
+```
+Yubico piv tool
+https://developers.yubico.com/yubico-piv-tool/Releases/yubico-piv-tool-1.4.0-mac.zip
+
+Information on Yubikey 4 used for this guide:
+https://www.yubico.com/products/yubikey-hardware/yubikey4/
+
+References:
+http://forum.yubico.com/viewtopic.php?f=26&t=2124
+
+Using openssl export the client certificate, ca certificate, and key to one file
+```
+openssl pkcs12 -export -out bbogaert-cert-key.p12 -inkey bbogaert.key -in bbogaert.crt -certfile sykes-ca.crt -nodes
+```
+
+
+
+To successfully import the certificate onto my yubikey you may need to reset the pin and puk codes first.
+
+https://developers.yubico.com/yubico-piv-tool/YubiKey_PIV_introduction.html
+
+```
+./yubico-piv-tool -a verify-pin -P 471112
+./yubico-piv-tool -a verify-pin -P 471112
+./yubico-piv-tool -a verify-pin -P 471112
+./yubico-piv-tool -a verify-pin -P 471112
+./yubico-piv-tool -a change-puk -P 471112 -N 6756789
+./yubico-piv-tool -a change-puk -P 471112 -N 6756789
+./yubico-piv-tool -a change-puk -P 471112 -N 6756789
+./yubico-piv-tool -a change-puk -P 471112 -N 6756789
+./yubico-piv-tool -a reset
+```
+
+After I reset the codes I was able to import the certificates onto the key.
+
+Import the certificates using the yubico-piv-tool. Note, after the “-P” is where you would put your configured pin.
+```
+./yubico-piv-tool -s 9c -i ~/bbogaert-cert-key.p12 -K PKCS12 -a import-key -a import-cert -P 71234523
+```
+
+The next step is to use the OpenVPN program and the opensc library to find the identifier of the card and modify the client configuration file. Here I’m using the openvpn binary directly from within the Viscosity program and pointing to the opensc security library to find the ids of my yubikey. We will then put this information in the configuration file.
+
+```
+byronicle:bin bbogaert$ sudo /Applications/Viscosity.app/Contents/MacOS/openvpn --show-pkcs11-ids /usr/local/Cellar/opensc/0.15.0/lib/opensc-pkcs11.so
+Password:
+
+The following objects are available for use.
+Each object shown below may be used as parameter to
+--pkcs11-id option please remember to use single quote mark.
+
+Certificate
+       DN:             C=US, ST=CA, L=San Francisco, O=Wikimedia, OU=OIT, CN=bbogaert, name=Byron Bogaert, emailAddress=techsupport@wikimedia.org
+       Serial:         02
+       Serialized id:  piv_II/PKCS\x2315\x20emulated/00000000/PIV_II\x20\x28PIV\x20Card\x20Holder\x20pin\x29/02
+
+```
+Edit the client configuration file and add the following lines to the end:
+```
+pkcs11-providers /usr/local/Cellar/opensc/0.15.0/lib/opensc-pkcs11.so
+pkcs11-id 'piv_II/PKCS\x2315\x20emulated/00000000/PIV_II\x20\x28PIV\x20Card\x20Holder\x20pin\x29/02'
+```
+
+The configuration file can then be imported into Viscosity. I have tried using tunnelblick but it does not work well with PKCS #11 providers. Also, when using viscosity “Allow unsafe OpenVPN commands to be used” needs to be checked. I’m not sure why the opensc-pkcs11.co is in a “unsafe” location, but if I could move it to a safe location I would. Any insight into amending this would be much appreciated.
+
+Once, the configuration is in, connect to the vpn, and a window will appear asking for your pin to access the certificate on the device. After entering your pin, the program will pull your certificate off of the key and log you into the VPN.
