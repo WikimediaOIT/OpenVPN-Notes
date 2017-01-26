@@ -3,8 +3,8 @@
 
 OpenVPN is an Open Source solution for implementing a VPN server. In this article we will describe how to install and setup OpenVPN, as well as OpenVPN with 2 Factor Authentication. The setup described here is using the Ubuntu distribution of Linux. The initial server setup instructions have been adapted from Ubuntu’s official guide on setting up an OpenVPN server.
 
-# Build the initial server
-## Install OpenVPN on Ubuntu 16.04 using instructions from OpenVPN
+## Build the initial server
+### Install OpenVPN on Ubuntu 16.04 using instructions from OpenVPN
 
 Instructions: https://help.ubuntu.com/lts/serverguide/openvpn.html
 
@@ -14,7 +14,7 @@ sudo -i
 # Install the OpenVPN packaged and the easy-rsa package
 apt-get install easy-rsa openvpn
 ```
-### Setup the Public Key Infrastructure
+#### Setup the Public Key Infrastructure
 
 Make a directory for easy-rsa in the OpenVPN directory
 
@@ -112,7 +112,7 @@ Write out database with 1 new entries
 Data Base Updated
 root@sykes:/etc/openvpn/easy-rsa#
 ```
-### Configure the OpenVPN service
+#### Configure the OpenVPN service
 To configure the server to run the OpenVPN service we will need to make a configuration file. OpenVPN copies a template to the server to be used. The template can be found in the documentation and examples folder on the server. Another template, linked here, is available on OpenVPN’s GitHub site.
 https://raw.githubusercontent.com/OpenVPN/openvpn/master/sample/sample-config-files/server.conf
 
@@ -182,7 +182,7 @@ verb 3
 
 Once your client file has been created, test the connection with your OpenVPN client. On my Mac I use Viscosity. Another client for mac that could be used is Tunnelblick. Both of these clients I find easier to use then the command line prompt.
 
-# Harden VPN Security by using PKCS #11
+## Harden VPN Security by using PKCS #11
 The great thing about OpenVPN is that it can be used with open standards such as PKCS. PKCS #11 is a standard for Cryptographic Token Interface. These devices can store certificates and keys such as the ones used by OpenVPN. In this part of the tutorial we will be using a Yubikey to store the certificate and connect to the VPN. Please, note, getting the certificate on the card needed quite a bit of hackery, but nonetheless, here is my process.
 From the yubikey forum post one needs openvpn, opensc, and yubico-piv-tool or yubikey-piv-manager
 Viscosity OpenVPN application:
@@ -260,3 +260,52 @@ pkcs11-id 'piv_II/PKCS\x2315\x20emulated/00000000/PIV_II\x20\x28PIV\x20Card\x20H
 The configuration file can then be imported into Viscosity. I have tried using tunnelblick but it does not work well with PKCS #11 providers. Also, when using viscosity “Allow unsafe OpenVPN commands to be used” needs to be checked. I’m not sure why the opensc-pkcs11.co is in a “unsafe” location, but if I could move it to a safe location I would. Any insight into amending this would be much appreciated.
 
 Once, the configuration is in, connect to the vpn, and a window will appear asking for your pin to access the certificate on the device. After entering your pin, the program will pull your certificate off of the key and log you into the VPN.
+
+## OpenVPN with Yubikey OTP and LDAP
+OpenVPN can also be configured to use Yubikeys with OTP. When a person logs into the VPN they press the button on their Yubikey which is then authenticated against Yubikey’s server. Once this second passcode is authenticated the person can login.
+
+In order to validate against the Yubico authentication database
+Yubikey PAM Module: https://github.com/Yubico/yubico-pam
+
+Register for Yubico API: https://upgrade.yubico.com/getapikey/
+
+Buy a Yubikey: https://www.yubico.com/products/yubikey-hardware/
+
+Be sure to get a Yubikey that can do OTP
+
+To use PAM with OpenVPN we need to add a line to the OpenVPN configuration file. Use the OpenVPN PAM module, along with the location of the PAM configuration for OpenVPN:
+```
+plugin /usr/lib/openvpn/openvpn-plugin-auth-pam.so /etc/pam.d/openvpn
+```
+When using LDAP, store Yubico serial numbers by using an existing attribute for LDAP or add your own custom attribute. I found the “pager” attribute a good one to use for test purposes.
+
+The OpenVPN file for PAM needs to “stacked” with another authentication method to insure that two-factor authentication. A mistake that could be made is that the Yubico PAM module is checking that the User’s password is valid. This is not the case. The Yubico PAM module will just evaluate that the OTP is valid for that particular key. This module will not verify the person’s LDAP password. To verify the person’s ldap password, one needs to install the LDAP module for PAM.
+
+Article on PAM: https://www.digitalocean.com/community/tutorials/how-to-use-pam-to-configure-authentication-on-an-ubuntu-12-04-vps
+
+The following PAM configuration works by first evaluating the password entered by the user. The Yubico PAM module will separate the password from the OTP, verify the OTP, then send the password to the next PAM module. Following the Yubico module, is the ldap module which will take the person’s password (use_first_pass) and evaluate this with LDAP.
+Pam file for OpenVPN:
+```
+# The following is for authentication with Yubikey OTP
+# Yubico documentation: https://github.com/Yubico/yubico-pam
+# Check ldap for yubikey serial number with yubikey attribute and make sure
+# this is required
+auth  required  pam_yubico.so authfile=/etc/yubikey_mappings ldap_uri=ldaps://ldap.example.org capath=/etc/ssl/certs yubi_attr=yubikey id=12345 ldapdn=ou=people,dc=esample,dc=org ldap_filter=(cn=%u) ldap_bind_user=cn=admin,dc=example,dc=org ldap_bind_password=S0meP@ssword
+
+# Make sure the person's ldap password is valid too. The previous PAM module for
+# yubico will pass the password to this module for use
+auth required pam_ldap.so use_first_pass
+```
+
+### How to “bypass2fa” by using pam_access
+Pam_access allows pam to query for group membership and/or allow authentication for a particular host. In this case we will be using pam_access to check whether a person is a member of the bypass2fa group and allow them to be authenticated.
+
+Install packages: libpam-ldap, nscd
+
+References:
+
+https://linux.die.net/man/8/pam_access
+
+http://www.tldp.org/HOWTO/archived/LDAP-Implementation-HOWTO/pamnss.html
+
+https://wiki.debian.org/LDAP/NSS
